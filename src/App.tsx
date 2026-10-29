@@ -66,7 +66,7 @@ export default function App() {
               <Calendar className="w-4 h-4" />
             </div>
             <div>
-              <span className="tracking-tight text-white">Group Scheduler</span>
+              <span className="tracking-tight text-white">JustMeetAlready</span>
             </div>
           </button>
 
@@ -109,7 +109,7 @@ export default function App() {
       {/* Footer */}
       <footer className="border-t border-gray-200 bg-white py-4 text-center text-xs text-gray-500">
         <p>
-          Group Scheduler — When2meet-style shared grid scheduling with multi-timezone correctness and touch support.
+          JustMeetAlready — Fast shared grid group scheduling with multi-timezone correctness and mobile touch support.
         </p>
       </footer>
     </div>

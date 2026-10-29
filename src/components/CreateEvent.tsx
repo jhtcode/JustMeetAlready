@@ -6,7 +6,7 @@ import {
   WEEKDAY_NAMES,
 } from '../utils/timezone';
 import { EventMode, SchedulerEvent } from '../types';
-import { Calendar, Clock, Globe, ArrowRight, ShieldAlert, Sparkles, Check } from 'lucide-react';
+import { Calendar, Clock, Globe, ArrowRight, ShieldAlert, Sparkles, Check, AlertCircle } from 'lucide-react';
 
 interface CreateEventProps {
   onEventCreated: (event: SchedulerEvent) => void;
@@ -113,11 +113,6 @@ export const CreateEvent: React.FC<CreateEventProps> = ({
       return;
     }
 
-    if (noEarlierThan > noLaterThan) {
-      setError('"No earlier than" must be earlier than or equal to "No later than".');
-      return;
-    }
-
     setSubmitting(true);
     try {
       const res = await fetch('/api/events', {
@@ -156,7 +151,7 @@ export const CreateEvent: React.FC<CreateEventProps> = ({
             <div>
               <h1 className="text-2xl font-bold tracking-tight">Create a New Event</h1>
               <p className="text-emerald-100 text-sm mt-1">
-                When2meet-style shared grid scheduling: drag-paint free times, see the group heatmap.
+                Fast shared grid group scheduling: drag-paint free times, see the group heatmap, and find the best meeting times.
               </p>
             </div>
             {onOpenDemo && (
@@ -406,7 +401,7 @@ export const CreateEvent: React.FC<CreateEventProps> = ({
               >
                 {hourOptions.map((h) => (
                   <option key={`earlier-${h}`} value={h}>
-                    {getHourLabel(h)}
+                    {getHourLabel(h, true)}
                   </option>
                 ))}
               </select>
@@ -428,12 +423,43 @@ export const CreateEvent: React.FC<CreateEventProps> = ({
               >
                 {hourOptions.map((h) => (
                   <option key={`later-${h}`} value={h}>
-                    {getHourLabel(h)}
+                    {getHourLabel(h, true)}
                   </option>
                 ))}
               </select>
             </div>
           </div>
+
+          {/* Smart AM vs PM / Overnight & Blocked Hours Guidance */}
+          {noEarlierThan > noLaterThan && (
+            <div className="p-3.5 bg-emerald-50/90 border border-emerald-200 rounded-lg text-xs space-y-2">
+              <div className="font-semibold text-emerald-950 flex items-center gap-1.5">
+                <Clock className="w-4 h-4 text-emerald-700 shrink-0" />
+                <span>
+                  Active Schedule: {getHourLabel(noEarlierThan)} – {getHourLabel(noLaterThan)} late night
+                </span>
+              </div>
+              <p className="text-emerald-900 leading-relaxed">
+                This schedule allows meetings from <strong>{getHourLabel(noEarlierThan)}</strong> through late night <strong>{getHourLabel(noLaterThan)}</strong>.
+                The hours between <strong>{getHourLabel(noLaterThan)} and {getHourLabel(noEarlierThan)}</strong> are automatically <strong>blocked</strong> from scheduling and omitted from the calendar grid.
+              </p>
+              {noLaterThan < 12 && noEarlierThan <= noLaterThan + 12 && (
+                <div className="pt-1 border-t border-emerald-200/80">
+                  <p className="text-[11px] text-gray-600 mb-1.5">
+                    Did you mean afternoon on the same calendar day instead of late night?
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setNoLaterThan(noLaterThan + 12)}
+                    className="px-2.5 py-1 bg-white hover:bg-emerald-50 text-emerald-800 border border-emerald-300 font-semibold rounded text-xs shadow-xs transition inline-flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Check className="w-3 h-3 text-emerald-600" />
+                    <span>Switch "No later than" to {getHourLabel(noLaterThan + 12)} (afternoon)</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
           <p className="text-xs text-gray-500">
             Supports a full 24-hour window: 12:00 AM through 11:00 PM. Each hour contains four
             15-minute paintable blocks.

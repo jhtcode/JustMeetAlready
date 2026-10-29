@@ -1,6 +1,8 @@
 {
-  "name": "Group Scheduler",
-  "description": "A When2meet-style group scheduler with drag-to-paint 15-minute availability, instant saves, robust multi-timezone and DST conversion, and mobile touch support.",
+  "name": "JustMeetAlready",
+  "description": "A group scheduler with drag-to-paint 15-minute availability, instant saves, robust multi-timezone and DST conversion, and mobile touch support.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

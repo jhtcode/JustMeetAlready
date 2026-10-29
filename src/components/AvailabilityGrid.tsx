@@ -4,6 +4,8 @@ import {
   formatSlotRangeInTimeZone,
   getHourLabel,
   getTimeZoneFriendlyName,
+  buildGridStructure,
+  GridCellData,
 } from '../utils/timezone';
 import { SchedulerEvent, Participant } from '../types';
 import { Check, Users, User, Info, HelpCircle } from 'lucide-react';
@@ -20,13 +22,7 @@ interface AvailabilityGridProps {
   onSelectParticipant?: (participantId: string | null) => void;
 }
 
-interface CellData {
-  utcIso: string;
-  localHour: number;
-  localMinute: number;
-  localDateKey: string;
-  dayHeaderLabel: string;
-}
+type CellData = GridCellData;
 
 export const AvailabilityGrid: React.FC<AvailabilityGridProps> = ({
   type,
@@ -66,52 +62,17 @@ export const AvailabilityGrid: React.FC<AvailabilityGridProps> = ({
   // Group inspection tooltip state for hover / tap
   const [inspectedSlot, setInspectedSlot] = useState<string | null>(null);
 
-  // Process all event slots into viewer timezone structure
+  // Process all event slots into viewer timezone structure with overnight and blocked hours support
   const { dayColumns, hourRange, slotLookup } = useMemo(() => {
-    const daysMap = new Map<string, { key: string; label: string; weekday: string }>();
-    const slotMap = new Map<string, CellData>();
-    let minH = 24;
-    let maxH = 0;
+    return buildGridStructure({
+      eventSlots: event.slots,
+      viewerTimeZone,
+      mode: event.mode,
+      noEarlierThan: event.noEarlierThan,
+      noLaterThan: event.noLaterThan,
+    });
+  }, [event.slots, viewerTimeZone, event.mode, event.noEarlierThan, event.noLaterThan]);
 
-    for (const utcIso of event.slots) {
-      const view = formatSlotInTimeZone(utcIso, viewerTimeZone, event.mode);
-      if (!daysMap.has(view.localDateKey)) {
-        daysMap.set(view.localDateKey, {
-          key: view.localDateKey,
-          label: view.dayHeaderLabel,
-          weekday: view.weekdayName,
-        });
-      }
-
-      if (view.localHour < minH) minH = view.localHour;
-      if (view.localHour > maxH) maxH = view.localHour;
-
-      const lookupKey = `${view.localDateKey}_${view.localHour}_${view.localMinute}`;
-      const cellData: CellData = {
-        utcIso,
-        localHour: view.localHour,
-        localMinute: view.localMinute,
-        localDateKey: view.localDateKey,
-        dayHeaderLabel: view.dayHeaderLabel,
-      };
-      slotMap.set(lookupKey, cellData);
-    }
-
-    // Sort days chronologically
-    const sortedDays = Array.from(daysMap.values()).sort((a, b) => a.key.localeCompare(b.key));
-    const hours: number[] = [];
-    if (minH <= maxH) {
-      for (let h = minH; h <= maxH; h++) {
-        hours.push(h);
-      }
-    }
-
-    return {
-      dayColumns: sortedDays,
-      hourRange: hours,
-      slotLookup: slotMap,
-    };
-  }, [event.slots, viewerTimeZone, event.mode]);
 
   // Count total participants who have responded
   const totalRespondents = useMemo(() => {
@@ -140,7 +101,7 @@ export const AvailabilityGrid: React.FC<AvailabilityGridProps> = ({
     // Fraction available from 0 to 1
     const fraction = availableCount / totalRespondents;
 
-    // Green heatmap scale from light to dark green (When2meet style)
+    // Green heatmap scale from light to dark green based on group availability
     let bg = '#dcfce7'; // 1/N
     let text = '#14532d';
 

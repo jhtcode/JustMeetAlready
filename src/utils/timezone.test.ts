@@ -6,6 +6,8 @@ import {
   formatSlotRangeInTimeZone,
   generateEventSlots,
   getHourLabel,
+  getHourSequence,
+  buildGridStructure,
 } from './timezone';
 
 test('wallClockToUtc accurately converts Pacific Time to UTC', () => {
@@ -71,6 +73,38 @@ test('formatSlotRangeInTimeZone formats both viewer and organizer time strings',
   assert.match(rangeStr, /7:00 PM/);
 });
 
+test('generateEventSlots generates overnight slots across midnight', () => {
+  // 9:00 PM (21) to 2:00 AM (2) overnight
+  const slots = generateEventSlots({
+    mode: 'specific',
+    selectedDates: ['2026-11-06'],
+    noEarlierThan: 21,
+    noLaterThan: 2,
+    timeZone: 'America/Los_Angeles',
+  });
+
+  // Hours: 21, 22, 23 (3 hours) + 0, 1, 2 (3 hours) = 6 hours * 4 cells = 24 cells
+  assert.equal(slots.length, 24);
+  assert.equal(slots[0], wallClockToUtc(2026, 11, 6, 21, 0, 'America/Los_Angeles'));
+  assert.equal(slots[slots.length - 1], wallClockToUtc(2026, 11, 7, 2, 45, 'America/Los_Angeles'));
+});
+
+test('getHourSequence blocks hours between 2 AM and 9 AM when scheduling 9 AM to 2 AM', () => {
+  // 9 AM (9) to 2 AM (2)
+  const seq = getHourSequence(9, 2);
+  // Expected: 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 0, 1, 2 (18 hours)
+  assert.equal(seq.length, 18);
+  assert.equal(seq[0], 9);
+  assert.equal(seq[14], 23);
+  assert.equal(seq[15], 0);
+  assert.equal(seq[17], 2);
+
+  // Blocked hours: 3, 4, 5, 6, 7, 8 (2 AM to 9 AM) MUST NOT be present
+  for (const blockedHour of [3, 4, 5, 6, 7, 8]) {
+    assert.equal(seq.includes(blockedHour), false);
+  }
+});
+
 test('getHourLabel maps 24h integers to 12h labels accurately', () => {
   assert.equal(getHourLabel(0), '12:00 AM');
   assert.equal(getHourLabel(9), '9:00 AM');
@@ -78,3 +112,52 @@ test('getHourLabel maps 24h integers to 12h labels accurately', () => {
   assert.equal(getHourLabel(17), '5:00 PM');
   assert.equal(getHourLabel(23), '11:00 PM');
 });
+
+test('buildGridStructure groups late-night slots under session day column and blocks 2 AM to 9 AM', () => {
+  const slots = generateEventSlots({
+    mode: 'specific',
+    selectedDates: ['2026-11-13'],
+    noEarlierThan: 9,
+    noLaterThan: 2,
+    timeZone: 'America/Los_Angeles',
+  });
+
+  const grid = buildGridStructure({
+    eventSlots: slots,
+    viewerTimeZone: 'America/Los_Angeles',
+    mode: 'specific',
+    noEarlierThan: 9,
+    noLaterThan: 2,
+  });
+
+  // Exactly 1 day column: Friday Nov 13 (late night 12 AM - 2 AM stays under Friday)
+  assert.equal(grid.dayColumns.length, 1);
+  assert.equal(grid.dayColumns[0].key, '2026-11-13');
+
+  // Hour range runs 9 AM to 11 PM, then 12 AM to 2 AM (18 hours total)
+  assert.equal(grid.hourRange.length, 18);
+  assert.equal(grid.hourRange[0], 9);
+  assert.equal(grid.hourRange[14], 23);
+  assert.equal(grid.hourRange[15], 0);
+  assert.equal(grid.hourRange[17], 2);
+
+  // Blocked hours 3..8 are NOT present
+  for (const blocked of [3, 4, 5, 6, 7, 8]) {
+    assert.equal(grid.hourRange.includes(blocked), false);
+  }
+
+  // All 72 slots (18 hours * 4 cells) are present in slotLookup under Friday's column
+  assert.equal(slots.length, 72);
+  for (const utcIso of slots) {
+    let found = false;
+    for (const cell of grid.slotLookup.values()) {
+      if (cell.utcIso === utcIso) {
+        found = true;
+        assert.equal(cell.localDateKey, '2026-11-13');
+        break;
+      }
+    }
+    assert.equal(found, true, `Slot ${utcIso} must be found in slotLookup under Friday 2026-11-13`);
+  }
+});
+

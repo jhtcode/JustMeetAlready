@@ -195,6 +195,8 @@ export function generateEventSlots(config: {
     dateStrings = sortedDays.map((dayIdx) => WEEKDAY_REFERENCE_DATES[dayIdx]);
   }
 
+  const isOvernight = noEarlierThan > noLaterThan;
+
   // Iterate over each date
   for (const dateStr of dateStrings) {
     const [yearStr, monthStr, dayStr] = dateStr.split('-');
@@ -202,17 +204,67 @@ export function generateEventSlots(config: {
     const month = parseInt(monthStr, 10);
     const day = parseInt(dayStr, 10);
 
-    // From noEarlierThan hour to noLaterThan hour
-    for (let h = noEarlierThan; h <= noLaterThan; h++) {
-      for (const m of [0, 15, 30, 45]) {
-        // If hour is noLaterThan, When2meet includes the full hour row
-        const utcIso = wallClockToUtc(year, month, day, h, m, timeZone);
-        slots.push(utcIso);
+    if (!isOvernight) {
+      // Standard same-day window (e.g. 9:00 AM to 5:00 PM)
+      for (let h = noEarlierThan; h <= noLaterThan; h++) {
+        for (const m of [0, 15, 30, 45]) {
+          const utcIso = wallClockToUtc(year, month, day, h, m, timeZone);
+          slots.push(utcIso);
+        }
+      }
+    } else {
+      // Overnight window spanning into next morning (e.g. 9:00 PM to 2:00 AM, or 9:00 AM to 2:00 AM next day)
+      // Part 1: from noEarlierThan through 23:45 on current date
+      for (let h = noEarlierThan; h <= 23; h++) {
+        for (const m of [0, 15, 30, 45]) {
+          const utcIso = wallClockToUtc(year, month, day, h, m, timeZone);
+          slots.push(utcIso);
+        }
+      }
+      // Part 2: from 00:00 through noLaterThan:45 on following calendar day
+      const nextDate = new Date(Date.UTC(year, month - 1, day + 1));
+      const nextY = nextDate.getUTCFullYear();
+      const nextM = nextDate.getUTCMonth() + 1;
+      const nextD = nextDate.getUTCDate();
+      for (let h = 0; h <= noLaterThan; h++) {
+        for (const m of [0, 15, 30, 45]) {
+          const utcIso = wallClockToUtc(nextY, nextM, nextD, h, m, timeZone);
+          slots.push(utcIso);
+        }
       }
     }
   }
 
-  return slots;
+  // Deduplicate and return in chronological order
+  return Array.from(new Set(slots)).sort();
+}
+
+/**
+ * Returns the ordered list of hours for an event's schedule window.
+ * When noEarlierThan > noLaterThan (e.g. 9 AM to 2 AM), the schedule runs from
+ * 9:00 AM through 11:00 PM, then continues past midnight to 2:00 AM late night.
+ * The hours between noLaterThan and noEarlierThan (e.g. 2 AM to 9 AM) are blocked/excluded.
+ */
+export function getHourSequence(noEarlierThan: number, noLaterThan: number): number[] {
+  if (noEarlierThan <= noLaterThan) {
+    const hours: number[] = [];
+    for (let h = noEarlierThan; h <= noLaterThan; h++) {
+      hours.push(h);
+    }
+    return hours;
+  }
+
+  // Overnight / late-night window: e.g. 9 (9 AM) to 2 (2 AM)
+  // Sequence: 9, 10, ..., 23, 0, 1, 2
+  // Hours between 2 AM and 9 AM (3, 4, 5, 6, 7, 8) are excluded/blocked
+  const hours: number[] = [];
+  for (let h = noEarlierThan; h <= 23; h++) {
+    hours.push(h);
+  }
+  for (let h = 0; h <= noLaterThan; h++) {
+    hours.push(h);
+  }
+  return hours;
 }
 
 /**
@@ -352,10 +404,189 @@ export function formatSlotRangeInTimeZone(
 
 /**
  * Helper to get 12-hour label for an hour number (0 to 23).
+ * Optionally appends descriptive time-of-day hints (e.g. morning, afternoon, evening).
  */
-export function getHourLabel(hour: number): string {
-  if (hour === 0) return '12:00 AM';
-  if (hour === 12) return '12:00 PM';
-  if (hour < 12) return `${hour}:00 AM`;
-  return `${hour - 12}:00 PM`;
+export function getHourLabel(hour: number, withHint = false): string {
+  let baseTime = '';
+  if (hour === 0) baseTime = '12:00 AM';
+  else if (hour === 12) baseTime = '12:00 PM';
+  else if (hour < 12) baseTime = `${hour}:00 AM`;
+  else baseTime = `${hour - 12}:00 PM`;
+
+  if (!withHint) {
+    return baseTime;
+  }
+
+  if (hour === 0) return '12:00 AM (midnight)';
+  if (hour === 12) return '12:00 PM (noon)';
+  if (hour >= 1 && hour <= 4) return `${baseTime} (late night / early morning)`;
+  if (hour >= 5 && hour <= 11) return `${baseTime} (morning)`;
+  if (hour >= 13 && hour <= 17) return `${baseTime} (afternoon)`;
+  if (hour >= 18 && hour <= 23) return `${baseTime} (evening / night)`;
+  return baseTime;
 }
+
+/**
+ * Returns previous calendar date key (YYYY-MM-DD).
+ */
+export function getPreviousDateKey(dateKey: string): string {
+  const [y, m, d] = dateKey.split('-').map((v) => parseInt(v, 10));
+  const prev = new Date(Date.UTC(y, m - 1, d - 1));
+  const py = prev.getUTCFullYear();
+  const pm = String(prev.getUTCMonth() + 1).padStart(2, '0');
+  const pd = String(prev.getUTCDate()).padStart(2, '0');
+  return `${py}-${pm}-${pd}`;
+}
+
+export interface GridColumn {
+  key: string;
+  label: string;
+  weekday: string;
+}
+
+export interface GridCellData {
+  utcIso: string;
+  localHour: number;
+  localMinute: number;
+  localDateKey: string;
+  dayHeaderLabel: string;
+}
+
+export interface GridStructure {
+  dayColumns: GridColumn[];
+  hourRange: number[];
+  slotLookup: Map<string, GridCellData>;
+}
+
+/**
+ * Builds the visual calendar grid structure (day columns, hour rows, slot lookup).
+ * Seamlessly handles overnight schedules (e.g. 9 AM to 2 AM) by:
+ * 1. Excluding blocked hours (e.g. 2 AM to 9 AM) so they do not take up vertical space.
+ * 2. Grouping post-midnight slots (e.g. 12 AM - 2 AM) under the session's day column.
+ */
+export function buildGridStructure(params: {
+  eventSlots: string[];
+  viewerTimeZone: string;
+  mode: 'specific' | 'weekdays';
+  noEarlierThan: number;
+  noLaterThan: number;
+}): GridStructure {
+  const { eventSlots, viewerTimeZone, mode, noEarlierThan, noLaterThan } = params;
+  if (!eventSlots || eventSlots.length === 0) {
+    return { dayColumns: [], hourRange: [], slotLookup: new Map() };
+  }
+
+  const isOvernight = noEarlierThan > noLaterThan;
+
+  // Format all slots in viewer's time zone
+  const views = eventSlots.map((utcIso) => ({
+    utcIso,
+    view: formatSlotInTimeZone(utcIso, viewerTimeZone, mode),
+  }));
+
+  // Collect present hours in viewer time zone
+  const presentHoursSet = new Set<number>();
+  for (const item of views) {
+    presentHoursSet.add(item.view.localHour);
+  }
+
+  let hourRange: number[] = [];
+  let startHour = noEarlierThan;
+
+  if (isOvernight) {
+    // If wrapping across midnight in viewer's time zone:
+    if (presentHoursSet.has(0) && presentHoursSet.has(23) && presentHoursSet.size < 24) {
+      // Find start of active window: an hour h in presentHours where h-1 is NOT present
+      let detectedStart = -1;
+      for (const h of presentHoursSet) {
+        const prevH = (h - 1 + 24) % 24;
+        if (!presentHoursSet.has(prevH)) {
+          detectedStart = h;
+          break;
+        }
+      }
+      if (detectedStart !== -1) {
+        startHour = detectedStart;
+      }
+      const seq: number[] = [];
+      let curr = startHour;
+      while (presentHoursSet.has(curr) && seq.length < 24) {
+        seq.push(curr);
+        curr = (curr + 1) % 24;
+      }
+      hourRange = seq;
+    } else {
+      // Shifted or un-wrapped in viewer time zone
+      const sortedHours = Array.from(presentHoursSet).sort((a, b) => a - b);
+      if (sortedHours.length > 0) {
+        const minH = sortedHours[0];
+        const maxH = sortedHours[sortedHours.length - 1];
+        startHour = minH;
+        for (let h = minH; h <= maxH; h++) {
+          if (presentHoursSet.has(h)) hourRange.push(h);
+        }
+      }
+    }
+  } else {
+    // Standard daytime window: minH to maxH
+    const sortedHours = Array.from(presentHoursSet).sort((a, b) => a - b);
+    if (sortedHours.length > 0) {
+      const minH = sortedHours[0];
+      const maxH = sortedHours[sortedHours.length - 1];
+      startHour = minH;
+      for (let h = minH; h <= maxH; h++) {
+        hourRange.push(h);
+      }
+    }
+  }
+
+  const daysMap = new Map<string, GridColumn>();
+  const slotLookup = new Map<string, GridCellData>();
+
+  for (const { utcIso, view } of views) {
+    let sessionDateKey = view.localDateKey;
+    let sessionDayHeaderLabel = view.dayHeaderLabel;
+    let sessionWeekday = view.weekdayName;
+
+    // For overnight schedules, slots in the early morning (hours after midnight before startHour)
+    // belong to the evening session of the previous calendar day
+    if (isOvernight && view.localHour < startHour) {
+      sessionDateKey = getPreviousDateKey(view.localDateKey);
+
+      const [y, m, d] = sessionDateKey.split('-').map((v) => parseInt(v, 10));
+      const refDate = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+      const weekdayShort = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'short' }).format(refDate);
+      const weekdayLong = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'long' }).format(refDate);
+      const monthShort = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'short' }).format(refDate);
+
+      sessionDayHeaderLabel = mode === 'specific' ? `${weekdayShort} ${monthShort} ${d}` : weekdayLong;
+      sessionWeekday = weekdayLong;
+    }
+
+    if (!daysMap.has(sessionDateKey)) {
+      daysMap.set(sessionDateKey, {
+        key: sessionDateKey,
+        label: sessionDayHeaderLabel,
+        weekday: sessionWeekday,
+      });
+    }
+
+    const lookupKey = `${sessionDateKey}_${view.localHour}_${view.localMinute}`;
+    slotLookup.set(lookupKey, {
+      utcIso,
+      localHour: view.localHour,
+      localMinute: view.localMinute,
+      localDateKey: sessionDateKey,
+      dayHeaderLabel: daysMap.get(sessionDateKey)?.label || sessionDayHeaderLabel,
+    });
+  }
+
+  const dayColumns = Array.from(daysMap.values()).sort((a, b) => a.key.localeCompare(b.key));
+
+  return {
+    dayColumns,
+    hourRange,
+    slotLookup,
+  };
+}
+

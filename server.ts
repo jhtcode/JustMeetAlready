@@ -86,7 +86,7 @@ function seedDefaultEvent() {
     slots,
   };
 
-  // Seed 3 participants to demonstrate When2meet heatmap
+  // Seed 3 participants to demonstrate group availability heatmap
   const p1Id = 'p_alice';
   const p2Id = 'p_budi';
   const p3Id = 'p_charlie';
