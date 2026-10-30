@@ -8,7 +8,17 @@ import {
   GridCellData,
 } from '../utils/timezone';
 import { SchedulerEvent, Participant } from '../types';
-import { Check, Users, User, Info, HelpCircle } from 'lucide-react';
+import {
+  Check,
+  Users,
+  User,
+  Info,
+  HelpCircle,
+  ChevronLeft,
+  ChevronRight,
+  Paintbrush,
+  Hand,
+} from 'lucide-react';
 
 interface AvailabilityGridProps {
   type: 'personal' | 'group';
@@ -49,6 +59,9 @@ export const AvailabilityGrid: React.FC<AvailabilityGridProps> = ({
   const dragActionRef = useRef<'add' | 'remove' | null>(null);
   const gridContainerRef = useRef<HTMLDivElement>(null);
 
+  // Mobile & Touch interaction mode: 'paint' (drag to paint with auto-scroll) vs 'pan' (touch scroll & tap to toggle)
+  const [touchMode, setTouchMode] = useState<'paint' | 'pan'>('paint');
+
   const activeSlotsRef = useRef<Set<string>>(activeSlots);
 
   // Sync activeSlots when currentPersonalSlots changes outside drag
@@ -72,6 +85,223 @@ export const AvailabilityGrid: React.FC<AvailabilityGridProps> = ({
       noLaterThan: event.noLaterThan,
     });
   }, [event.slots, viewerTimeZone, event.mode, event.noEarlierThan, event.noLaterThan]);
+
+  // Edge auto-scrolling engine for continuous scrolling during drag-painting
+  const autoScrollState = useRef<{
+    rafId: number | null;
+    vx: number;
+    vy: number;
+    lastX: number;
+    lastY: number;
+  }>({
+    rafId: null,
+    vx: 0,
+    vy: 0,
+    lastX: 0,
+    lastY: 0,
+  });
+
+  const stopAutoScroll = () => {
+    if (autoScrollState.current.rafId !== null) {
+      cancelAnimationFrame(autoScrollState.current.rafId);
+      autoScrollState.current.rafId = null;
+    }
+    autoScrollState.current.vx = 0;
+    autoScrollState.current.vy = 0;
+  };
+
+  const applyDragToSlot = (slotIso: string, action: 'add' | 'remove') => {
+    const currentSet = activeSlotsRef.current;
+    const hasSlot = currentSet.has(slotIso);
+
+    if (action === 'add' && !hasSlot) {
+      const next = new Set(currentSet);
+      next.add(slotIso);
+      activeSlotsRef.current = next;
+      setActiveSlots(next);
+    } else if (action === 'remove' && hasSlot) {
+      const next = new Set(currentSet);
+      next.delete(slotIso);
+      activeSlotsRef.current = next;
+      setActiveSlots(next);
+    }
+  };
+
+  const startAutoScroll = () => {
+    if (autoScrollState.current.rafId !== null) return;
+
+    const scrollLoop = () => {
+      const { vx, vy, lastX, lastY } = autoScrollState.current;
+      const container = gridContainerRef.current;
+
+      if (container && (vx !== 0 || vy !== 0)) {
+        container.scrollLeft += vx;
+        container.scrollTop += vy;
+
+        // Hit-test element under pointer as grid scrolls under finger
+        if (dragActionRef.current && isSignedIn) {
+          const elem = document.elementFromPoint(lastX, lastY);
+          const cell = elem?.closest('[data-slot-iso]') as HTMLElement | null;
+          const slotIso = cell?.getAttribute('data-slot-iso');
+          if (slotIso) {
+            applyDragToSlot(slotIso, dragActionRef.current);
+          }
+        }
+      }
+
+      if (autoScrollState.current.vx !== 0 || autoScrollState.current.vy !== 0) {
+        autoScrollState.current.rafId = requestAnimationFrame(scrollLoop);
+      } else {
+        autoScrollState.current.rafId = null;
+      }
+    };
+
+    autoScrollState.current.rafId = requestAnimationFrame(scrollLoop);
+  };
+
+  const updateAutoScrollSpeed = (clientX: number, clientY: number) => {
+    const container = gridContainerRef.current;
+    if (!container) return;
+
+    const rect = container.getBoundingClientRect();
+    autoScrollState.current.lastX = clientX;
+    autoScrollState.current.lastY = clientY;
+
+    // Sticky time column is ~80px wide on the left
+    const leftEdge = rect.left + 80;
+    const rightEdge = rect.right;
+    const topEdge = rect.top + 35;
+    const bottomEdge = rect.bottom;
+
+    const EDGE_MARGIN = 55;
+    const MAX_SPEED = 14;
+
+    let vx = 0;
+    let vy = 0;
+
+    // Check right edge
+    if (clientX > rightEdge - EDGE_MARGIN && clientX <= rightEdge + 40) {
+      const intensity = Math.min(1, (clientX - (rightEdge - EDGE_MARGIN)) / EDGE_MARGIN);
+      vx = Math.max(3, Math.round(intensity * MAX_SPEED));
+    }
+    // Check left edge (past sticky time column)
+    else if (clientX < leftEdge + EDGE_MARGIN && clientX >= rect.left - 20) {
+      const intensity = Math.min(1, (leftEdge + EDGE_MARGIN - clientX) / EDGE_MARGIN);
+      vx = -Math.max(3, Math.round(intensity * MAX_SPEED));
+    }
+
+    // Check bottom edge
+    if (clientY > bottomEdge - EDGE_MARGIN && clientY <= bottomEdge + 30) {
+      const intensity = Math.min(1, (clientY - (bottomEdge - EDGE_MARGIN)) / EDGE_MARGIN);
+      vy = Math.max(3, Math.round(intensity * MAX_SPEED));
+    }
+    // Check top edge
+    else if (clientY < topEdge + EDGE_MARGIN && clientY >= rect.top - 20) {
+      const intensity = Math.min(1, (topEdge + EDGE_MARGIN - clientY) / EDGE_MARGIN);
+      vy = -Math.max(3, Math.round(intensity * MAX_SPEED));
+    }
+
+    autoScrollState.current.vx = vx;
+    autoScrollState.current.vy = vy;
+
+    if (vx !== 0 || vy !== 0) {
+      startAutoScroll();
+    } else {
+      stopAutoScroll();
+    }
+  };
+
+  // Day navigation controls
+  const scrollDays = (direction: -1 | 1) => {
+    if (gridContainerRef.current) {
+      gridContainerRef.current.scrollBy({
+        left: direction * 192, // Scroll by 2 day columns
+        behavior: 'smooth',
+      });
+    }
+  };
+
+  const scrollToDayIndex = (index: number) => {
+    if (gridContainerRef.current) {
+      gridContainerRef.current.scrollTo({
+        left: index * 96,
+        behavior: 'smooth',
+      });
+    }
+  };
+
+  // Helper to extract slots for a day column
+  const getDaySlots = (dayKey: string): string[] => {
+    const result: string[] = [];
+    for (const [key, cell] of slotLookup.entries()) {
+      if (key.startsWith(`${dayKey}_`)) {
+        result.push(cell.utcIso);
+      }
+    }
+    return result;
+  };
+
+  // Bulk Day and Grid Actions
+  const handleFillDay = (dayKey: string) => {
+    if (!isPersonal || !isSignedIn) return;
+    const daySlots = getDaySlots(dayKey);
+    const next = new Set(activeSlotsRef.current);
+    daySlots.forEach((s) => next.add(s));
+    activeSlotsRef.current = next;
+    setActiveSlots(next);
+    if (onSavePersonalAvailability) {
+      onSavePersonalAvailability(Array.from(next));
+    }
+  };
+
+  const handleClearDay = (dayKey: string) => {
+    if (!isPersonal || !isSignedIn) return;
+    const daySlots = getDaySlots(dayKey);
+    const next = new Set(activeSlotsRef.current);
+    daySlots.forEach((s) => next.delete(s));
+    activeSlotsRef.current = next;
+    setActiveSlots(next);
+    if (onSavePersonalAvailability) {
+      onSavePersonalAvailability(Array.from(next));
+    }
+  };
+
+  const handleSelectAll = () => {
+    if (!isPersonal || !isSignedIn) return;
+    const next = new Set(event.slots);
+    activeSlotsRef.current = next;
+    setActiveSlots(next);
+    if (onSavePersonalAvailability) {
+      onSavePersonalAvailability(Array.from(next));
+    }
+  };
+
+  const handleClearAll = () => {
+    if (!isPersonal || !isSignedIn) return;
+    const next = new Set<string>();
+    activeSlotsRef.current = next;
+    setActiveSlots(next);
+    if (onSavePersonalAvailability) {
+      onSavePersonalAvailability([]);
+    }
+  };
+
+  // Tap-to-toggle single slot (especially used in 'pan' mode)
+  const handleCellClick = (slotIso: string) => {
+    if (!isPersonal || !isSignedIn) return;
+    const currentSet = activeSlotsRef.current;
+    const next = new Set(currentSet);
+    if (next.has(slotIso)) {
+      next.delete(slotIso);
+    } else {
+      next.add(slotIso);
+    }
+    activeSlotsRef.current = next;
+    setActiveSlots(next);
+    if (onSavePersonalAvailability) {
+      onSavePersonalAvailability(Array.from(next));
+    }
+  };
 
 
   // Count total participants who have responded
@@ -162,6 +392,11 @@ export const AvailabilityGrid: React.FC<AvailabilityGridProps> = ({
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!isPersonal || !isSignedIn) return;
 
+    // In pan / scroll mode on mobile, allow normal touch navigation (swiping left/right across days)
+    if (touchMode === 'pan') {
+      return;
+    }
+
     const target = e.target as HTMLElement;
     const cell = target.closest('[data-slot-iso]') as HTMLElement | null;
     if (!cell) return;
@@ -178,18 +413,14 @@ export const AvailabilityGrid: React.FC<AvailabilityGridProps> = ({
     const action = currentlyActive ? 'remove' : 'add';
     dragActionRef.current = action;
 
-    const next = new Set(activeSlotsRef.current);
-    if (action === 'add') {
-      next.add(slotIso);
-    } else {
-      next.delete(slotIso);
-    }
-    activeSlotsRef.current = next;
-    setActiveSlots(next);
+    applyDragToSlot(slotIso, action);
+    updateAutoScrollSpeed(e.clientX, e.clientY);
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!isPersonal || !isDragging || !dragActionRef.current || !isSignedIn) return;
+
+    updateAutoScrollSpeed(e.clientX, e.clientY);
 
     // Use elementFromPoint to hit-test under pointer (works seamlessly on mobile touch!)
     const elem = document.elementFromPoint(e.clientX, e.clientY);
@@ -199,24 +430,11 @@ export const AvailabilityGrid: React.FC<AvailabilityGridProps> = ({
     const slotIso = cell.getAttribute('data-slot-iso');
     if (!slotIso) return;
 
-    const action = dragActionRef.current;
-    const currentSet = activeSlotsRef.current;
-    const hasSlot = currentSet.has(slotIso);
-
-    if (action === 'add' && !hasSlot) {
-      const next = new Set(currentSet);
-      next.add(slotIso);
-      activeSlotsRef.current = next;
-      setActiveSlots(next);
-    } else if (action === 'remove' && hasSlot) {
-      const next = new Set(currentSet);
-      next.delete(slotIso);
-      activeSlotsRef.current = next;
-      setActiveSlots(next);
-    }
+    applyDragToSlot(slotIso, dragActionRef.current);
   };
 
   const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    stopAutoScroll();
     if (!isPersonal || !isDragging) return;
 
     setIsDragging(false);
@@ -374,7 +592,122 @@ export const AvailabilityGrid: React.FC<AvailabilityGridProps> = ({
         </div>
       )}
 
-      {/* Grid container with touch-action: none for touch painting without scrolling */}
+      {/* Day Navigation & Mobile Mode Bar */}
+      <div className="bg-gray-50/90 border-b border-gray-200 px-3 py-2 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 text-xs">
+        {/* Day scroll chevrons & day chips */}
+        <div className="flex items-center gap-1.5 overflow-x-auto py-0.5 max-w-full">
+          <button
+            type="button"
+            onClick={() => scrollDays(-1)}
+            className="p-1.5 rounded-lg bg-white hover:bg-gray-100 border border-gray-200 text-gray-700 shadow-2xs flex items-center gap-0.5 shrink-0 cursor-pointer transition active:scale-95"
+            title="Scroll to previous days"
+            aria-label="Previous day"
+          >
+            <ChevronLeft className="w-4 h-4" />
+            <span className="hidden sm:inline text-[11px] font-medium pr-1">Prev Day</span>
+          </button>
+
+          <div className="flex items-center gap-1 overflow-x-auto">
+            {dayColumns.map((day, idx) => (
+              <button
+                key={day.key}
+                type="button"
+                onClick={() => scrollToDayIndex(idx)}
+                className="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-white hover:bg-emerald-50 hover:text-emerald-800 border border-gray-200 text-gray-700 shrink-0 transition active:scale-95 cursor-pointer shadow-2xs"
+              >
+                {day.label}
+              </button>
+            ))}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => scrollDays(1)}
+            className="p-1.5 rounded-lg bg-white hover:bg-gray-100 border border-gray-200 text-gray-700 shadow-2xs flex items-center gap-0.5 shrink-0 cursor-pointer transition active:scale-95"
+            title="Scroll to next days"
+            aria-label="Next day"
+          >
+            <span className="hidden sm:inline text-[11px] font-medium pl-1">Next Day</span>
+            <ChevronRight className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Personal Mode Quick Controls: Mode Switch & Bulk Actions */}
+        {isPersonal && isSignedIn && (
+          <div className="flex items-center justify-between sm:justify-end gap-1.5 shrink-0 pt-1 sm:pt-0 border-t sm:border-t-0 border-gray-200">
+            {/* Touch Mode Segmented Toggle */}
+            <div className="inline-flex rounded-lg border border-gray-300 p-0.5 bg-gray-200/70 text-[11px] font-semibold shadow-2xs">
+              <button
+                type="button"
+                onClick={() => setTouchMode('paint')}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-md transition cursor-pointer ${
+                  touchMode === 'paint'
+                    ? 'bg-emerald-700 text-white shadow-2xs font-bold'
+                    : 'text-gray-700 hover:text-gray-900'
+                }`}
+                title="Drag finger to paint availability across slots"
+              >
+                <Paintbrush className="w-3.5 h-3.5" />
+                <span>Drag to Paint</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setTouchMode('pan')}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-md transition cursor-pointer ${
+                  touchMode === 'pan'
+                    ? 'bg-emerald-700 text-white shadow-2xs font-bold'
+                    : 'text-gray-700 hover:text-gray-900'
+                }`}
+                title="Swipe with your finger to scroll horizontally across days, tap any slot to toggle"
+              >
+                <Hand className="w-3.5 h-3.5" />
+                <span>Swipe & Tap</span>
+              </button>
+            </div>
+
+            {/* Quick Bulk Actions */}
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={handleSelectAll}
+                className="px-2 py-1 rounded-md bg-white hover:bg-emerald-50 text-emerald-800 border border-emerald-300 text-[11px] font-semibold transition cursor-pointer shadow-2xs"
+                title="Mark all event slots available"
+              >
+                All Free
+              </button>
+              <button
+                type="button"
+                onClick={handleClearAll}
+                className="px-2 py-1 rounded-md bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 text-[11px] font-medium transition cursor-pointer shadow-2xs"
+                title="Clear all availability"
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Mobile Hint Banner */}
+      {isPersonal && isSignedIn && (
+        <div className="bg-emerald-50/70 border-b border-emerald-100 px-3 py-1.5 flex items-center justify-between text-[11px] text-emerald-900">
+          <div className="flex items-center gap-1.5">
+            <Info className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+            <span>
+              {touchMode === 'pan' ? (
+                <strong>Swipe & Tap mode:</strong>
+              ) : (
+                <strong>Drag to Paint mode:</strong>
+              )}{' '}
+              {touchMode === 'pan'
+                ? 'Swipe across days freely with your finger. Tap any slot to toggle.'
+                : 'Drag across hours to paint. Drag near edges or use Day arrows ‹ › to scroll to next days.'}
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* Grid container */}
       <div
         ref={gridContainerRef}
         onPointerDown={handlePointerDown}
@@ -385,7 +718,7 @@ export const AvailabilityGrid: React.FC<AvailabilityGridProps> = ({
           isPersonal && !isSignedIn ? 'opacity-60 pointer-events-none' : ''
         }`}
         style={{
-          touchAction: isPersonal && isSignedIn ? 'none' : 'auto',
+          touchAction: isPersonal && isSignedIn && touchMode === 'paint' ? 'none' : 'auto',
           WebkitUserSelect: 'none',
         }}
       >
@@ -401,10 +734,32 @@ export const AvailabilityGrid: React.FC<AvailabilityGridProps> = ({
             {dayColumns.map((day) => (
               <div
                 key={day.key}
-                className="w-24 shrink-0 px-1 text-center border-l border-gray-200"
+                className="w-24 shrink-0 px-1 py-1 text-center border-l border-gray-200 flex flex-col justify-between"
               >
-                <div className="text-xs font-bold text-gray-800 truncate">{day.label}</div>
-                <div className="text-[10px] text-gray-500 truncate">{day.weekday}</div>
+                <div>
+                  <div className="text-xs font-bold text-gray-800 truncate">{day.label}</div>
+                  <div className="text-[10px] text-gray-500 truncate">{day.weekday}</div>
+                </div>
+                {isPersonal && isSignedIn && (
+                  <div className="flex items-center justify-center gap-1 mt-1 pt-1 border-t border-gray-100">
+                    <button
+                      type="button"
+                      onClick={() => handleFillDay(day.key)}
+                      className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-100/80 hover:bg-emerald-200 text-emerald-900 font-semibold cursor-pointer transition active:scale-95"
+                      title={`Mark all hours on ${day.label} as available`}
+                    >
+                      Fill
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleClearDay(day.key)}
+                      className="text-[9px] px-1.5 py-0.5 rounded bg-gray-100 hover:bg-gray-200 text-gray-600 font-medium cursor-pointer transition active:scale-95"
+                      title={`Clear all hours on ${day.label}`}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -451,6 +806,7 @@ export const AvailabilityGrid: React.FC<AvailabilityGridProps> = ({
                           <div
                             key={cell.utcIso}
                             data-slot-iso={cell.utcIso}
+                            onClick={() => handleCellClick(cell.utcIso)}
                             role="button"
                             tabIndex={0}
                             aria-label={`${cell.dayHeaderLabel} at ${timeLabel} - ${
