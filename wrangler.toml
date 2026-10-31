@@ -1,0 +1,21 @@
+# JustMeetAlready on Cloudflare Workers (free plan, no card required).
+# Replace database_id with the id from `wrangler d1 create justmeetalready`
+# before the first remote deploy. Local dev works without it.
+name = "justmeetalready"
+main = "worker/index.ts"
+compatibility_date = "2025-01-01"
+
+# Serve the Vite build from dist/. run_worker_first = true means the Worker
+# code in worker/index.ts decides: /api/* -> API, everything else -> asset,
+# unknown paths -> /index.html (SPA fallback). Without this, an /api request
+# that happened to match a file name could be served as a static file.
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+run_worker_first = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "justmeetalready"
+database_id = "REPLACE_WITH_WRANGLER_D1_CREATE_ID"
+migrations_dir = "migrations"

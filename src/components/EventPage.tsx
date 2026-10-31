@@ -36,6 +36,7 @@ export const EventPage: React.FC<EventPageProps> = ({ eventId, onCreateNew }) =>
 
   // Sign-in state
   const [currentParticipant, setCurrentParticipant] = useState<Participant | null>(null);
+  const [sessionToken, setSessionToken] = useState<string | null>(null);
   const [nameInput, setNameInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
@@ -86,11 +87,19 @@ export const EventPage: React.FC<EventPageProps> = ({ eventId, onCreateNew }) =>
   }, [fetchEventData]);
 
   // Live polling for group updates every 3 seconds (PRD 4.4)
+  // Skipped while the tab is hidden (saves server reads); refreshes on return.
   useEffect(() => {
     const timer = setInterval(() => {
-      fetchEventData(false);
+      if (document.visibilityState === 'visible') fetchEventData(false);
     }, 3000);
-    return () => clearInterval(timer);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') fetchEventData(false);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [fetchEventData]);
 
   // Handle Sign In / Registration
@@ -120,6 +129,7 @@ export const EventPage: React.FC<EventPageProps> = ({ eventId, onCreateNew }) =>
       }
 
       setCurrentParticipant(data.participant);
+      setSessionToken(data.token ?? null);
       // Update local availability state with their existing painting
       if (data.participant.id) {
         setAvailability((prev) => ({
@@ -139,6 +149,7 @@ export const EventPage: React.FC<EventPageProps> = ({ eventId, onCreateNew }) =>
 
   const handleSignOut = () => {
     setCurrentParticipant(null);
+    setSessionToken(null);
     setNameInput('');
     setPasswordInput('');
     setAuthError(null);
@@ -146,7 +157,7 @@ export const EventPage: React.FC<EventPageProps> = ({ eventId, onCreateNew }) =>
 
   // Immediate Save on painting drag release
   const handleSavePersonalAvailability = async (slots: string[]) => {
-    if (!currentParticipant) return;
+    if (!currentParticipant || !sessionToken) return;
 
     setIsSaving(true);
     // Optimistic local update
@@ -158,12 +169,23 @@ export const EventPage: React.FC<EventPageProps> = ({ eventId, onCreateNew }) =>
     try {
       const res = await fetch(`/api/events/${eventId}/availability`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sessionToken}`,
+        },
         body: JSON.stringify({
           participantId: currentParticipant.id,
           availableSlots: slots,
         }),
       });
+
+      if (res.status === 401) {
+        // Session expired or was revoked: make the user sign in again instead of silently losing edits.
+        handleSignOut();
+        setAuthError('Your session expired. Please sign in again.');
+        fetchEventData(false);
+        return;
+      }
 
       if (!res.ok) {
         const data = await res.json();
