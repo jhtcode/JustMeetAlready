@@ -4,12 +4,16 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx server.ts",
-    "start": "tsx server.ts",
+    "dev": "npm run build && wrangler dev",
+    "start": "wrangler dev",
     "build": "vite build",
     "preview": "vite preview",
-    "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "clean": "rm -rf dist",
+    "lint": "tsc --noEmit",
+    "deploy": "npm run build && wrangler deploy",
+    "db:create": "wrangler d1 create justmeetalready",
+    "db:migrate": "wrangler d1 migrations apply justmeetalready --remote",
+    "db:migrate:local": "wrangler d1 migrations apply justmeetalready --local"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -28,10 +32,11 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "autoprefixer": "^10.4.21",
-    "esbuild": "^0.25.0",
+    "esbuild": "^0.28.0",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.21.0",
     "typescript": "^7.0.2",
-    "@types/express": "^4.17.21"
+    "@types/express": "^4.17.21",
+    "wrangler": "^4.0.0"
   }
 }
