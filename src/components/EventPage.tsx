@@ -58,6 +58,13 @@ export const EventPage: React.FC<EventPageProps> = ({ eventId, onCreateNew }) =>
   const yourAvailabilityRef = useRef<HTMLDivElement>(null);
   const groupAvailabilityRef = useRef<HTMLDivElement>(null);
 
+  // Last successfully fetched payload (JSON) and whether local state has
+  // diverged from it via an optimistic update. Used to skip no-op polls:
+  // if the server data is unchanged and local state hasn't diverged, there
+  // is nothing to re-render, so we skip setState entirely.
+  const lastPollPayloadRef = useRef<string | null>(null);
+  const localDirtyRef = useRef(false);
+
   // Fetch event data
   const fetchEventData = useCallback(async (isInitial = false) => {
     try {
@@ -70,6 +77,16 @@ export const EventPage: React.FC<EventPageProps> = ({ eventId, onCreateNew }) =>
         throw new Error('Could not load event data.');
       }
       const data = await res.json();
+      const payload = JSON.stringify(data);
+      if (!isInitial && payload === lastPollPayloadRef.current && !localDirtyRef.current) {
+        // Server data unchanged and local state hasn't diverged: skip the
+        // re-render. This is the main phone-heat/battery saving — a poll
+        // that changes nothing no longer re-renders two grids + summary.
+        setError(null);
+        return;
+      }
+      lastPollPayloadRef.current = payload;
+      localDirtyRef.current = false;
       setEvent(data.event);
       setParticipants(data.participants);
       setAvailability(data.availability);
@@ -86,12 +103,18 @@ export const EventPage: React.FC<EventPageProps> = ({ eventId, onCreateNew }) =>
     fetchEventData(true);
   }, [fetchEventData]);
 
-  // Live polling for group updates every 3 seconds (PRD 4.4)
+  // Live polling for group updates every 30 seconds (was 3 seconds).
+  // Changed 2026-11-01 after users reported phones heating up: a 3-second
+  // poll keeps the mobile radio in high-power mode and re-renders the page
+  // 20 times a minute. 30 seconds is plenty for a group scheduler (people
+  // paint over minutes, not in real time), and own painting is instant
+  // regardless — it updates locally and saves on release. Immediate
+  // refreshes on return to the tab, sign-in, and save keep it feeling live.
   // Skipped while the tab is hidden (saves server reads); refreshes on return.
   useEffect(() => {
     const timer = setInterval(() => {
       if (document.visibilityState === 'visible') fetchEventData(false);
-    }, 3000);
+    }, 30000);
     const onVisible = () => {
       if (document.visibilityState === 'visible') fetchEventData(false);
     };
@@ -160,7 +183,9 @@ export const EventPage: React.FC<EventPageProps> = ({ eventId, onCreateNew }) =>
     if (!currentParticipant || !sessionToken) return;
 
     setIsSaving(true);
-    // Optimistic local update
+    // Optimistic local update — mark local state as diverged from the last
+    // poll so the next poll can't skip a needed revert if the save failed.
+    localDirtyRef.current = true;
     setAvailability((prev) => ({
       ...prev,
       [currentParticipant.id]: slots,
